@@ -42,10 +42,10 @@ def load_secrets(file_path="secrets.txt"):
 
 SECRETS = load_secrets()
 
-STUDENT_SECRET = SECRETS.get("STUDENT_SECRET") or os.getenv("STUDENT_SECRET")
-GITHUB_TOKEN = SECRETS.get("GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
-GITHUB_USERNAME = SECRETS.get("GITHUB_USERNAME") or os.getenv("GITHUB_USERNAME")
-AI_PIPE_TOKEN = SECRETS.get("API_KEY") or os.getenv("API_KEY")
+STUDENT_SECRET = os.getenv("STUDENT_SECRET") or SECRETS.get("STUDENT_SECRET")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or SECRETS.get("GITHUB_TOKEN")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME") or SECRETS.get("GITHUB_USERNAME")
+AI_PIPE_TOKEN = os.getenv("API_KEY") or  SECRETS.get("API_KEY")
 
 # ----------------------------
 # Configure OpenAI (AI Pipe)
@@ -610,4 +610,5 @@ def wait_for_pages_ready(pages_url, max_wait=60):
         time.sleep(3)
     print("⚠️ GitHub Pages did not become live within the timeout window.")
     return False
+
 
