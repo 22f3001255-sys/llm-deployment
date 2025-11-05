@@ -251,10 +251,17 @@ def create_and_deploy_repo(task, app_code, brief, attachments=None):
     
     print(f"🛠️ Creating repository: {repo_name}")
     # Create a new repository
+    clean_description = (
+        "".join(ch for ch in brief if ch.isprintable())
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .strip()
+    )[:350]
+    
     repo = user.create_repo(
         repo_name,
         private=False,
-        description=f"Auto-generated app for: {brief}",
+        description=clean_description,
         license_template="mit"
     )
 
@@ -572,7 +579,7 @@ def delete_repo_if_exists(user, repo_name):
         print(f"🗑️ Deleted existing repo: {repo_name}")
 
         # Wait for GitHub to finalize
-        for _ in range(12):  # up to ~60s
+        for _ in range(60):  # up to ~300s
             time.sleep(5)
             try:
                 user.get_repo(repo_name)
@@ -610,5 +617,6 @@ def wait_for_pages_ready(pages_url, max_wait=60):
         time.sleep(3)
     print("⚠️ GitHub Pages did not become live within the timeout window.")
     return False
+
 
 
