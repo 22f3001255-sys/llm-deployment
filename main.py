@@ -40,12 +40,12 @@ def load_secrets(file_path="secrets.txt"):
     return secrets
 
 
-SECRETS = load_secrets()
+#SECRETS = load_secrets()
 
-STUDENT_SECRET = os.getenv("STUDENT_SECRET") or SECRETS.get("STUDENT_SECRET")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or SECRETS.get("GITHUB_TOKEN")
-GITHUB_USERNAME = os.getenv("GITHUB_USERNAME") or SECRETS.get("GITHUB_USERNAME")
-AI_PIPE_TOKEN = os.getenv("API_KEY") or  SECRETS.get("API_KEY")
+STUDENT_SECRET = os.getenv("STUDENT_SECRET")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME")
+AI_PIPE_TOKEN = os.getenv("API_KEY")
 
 # ----------------------------
 # Configure OpenAI (AI Pipe)
@@ -164,27 +164,42 @@ def generate_minimal_app(brief: str, checks: list, attachments: list = None):
 
     prompt = f"""
     Generate a minimal static web app based on the brief below.
-
 Brief: {brief}
 Checks: {checks}
 {attachment_note}
-
 Requirements:
-- Include these files: index.html, style.css (optional), script.js (optional), README.md.
-- Attachments need to be fetched from the provided URLs or can be loaded locally (e.g., './input.md' or './data.csv') or you can embed images as base64 data URIs.
-- The app must be minimal but fully functional to pass all checks, shouldn't miss even a single one.
-- It should absolutely be possible to run the app by simply opening index.html in a browser as intended by the brief.
-- It should be able to function properly with the provided attachments if any.
+- Include these files: index.html, style.css (optional), script.js (optional), README.md, **and any other files that are mentioned or required by the brief**.
+- This includes files of any format such as .txt, .svg, .jpg, .png, .json, .csv, .xml, or any others explicitly requested.
+- Do not repeat files unnecessarily; only create each file once.
+- Each file must be complete and valid according to its type.
+- There should be no placeholders or incomplete sections.
+- Ensure the app meets ALL the specified checks below.
+- Every single file referenced or described in the brief MUST be generated and included in the JSON output. Not even one file should be missing.
+- Each file should contain appropriate content according to its purpose (for example, JSON data for .json files, SVG markup for .svg files, text for .txt files, etc.).
+- If any attachments are provided, make sure to integrate them correctly. Attachments can be fetched from provided URLs, loaded locally (e.g., './input.md', './data.csv'), or embedded directly as base64-encoded data URIs.
+- The app must remain minimal but fully functional — it should meet every stated requirement and pass all checks.
+- The app must work by simply opening index.html in a browser (no server or build tools required).
+- All generated shell commands, Makefiles, and GitHub Actions YAML must use
+  the current, valid syntax of the tools they call.
+  For example:
+    * Use "ruff check ." instead of "ruff ."
+    * Use "pytest" instead of "python -m pytest ." when appropriate
+    * Use "pip install package" (not deprecated forms)
+- You MUST ensure all CLI commands would succeed if executed on Ubuntu 22.04
+  with latest stable versions of their tools.
+- If any command may fail because of CLI version differences, rewrite it to the
+  safe, modern equivalent that will always work.
+- Never include outdated or shorthand subcommands that may be rejected.
 - Respond ONLY in JSON with this structure:
   {
     {
-    "index.html": "...",
-    "style.css": "...",
-    "script.js": "...",
-    "README.md": "..."
+      "index.html": "...",
+      "style.css": "...",
+      "script.js": "...",
+      "README.md": "...",
+      "(include ALL other expected files mentioned in the brief below, following the same key-value format)":"..."
     }
   }
-
 JavaScript (if needed):
 - Dynamically render content from attachments or user input.
 - For images: display them in <img> elements using clear IDs or classes.
@@ -267,10 +282,43 @@ def create_and_deploy_repo(task, app_code, brief, attachments=None):
 
     # --- Upload all generated files ---
     # app_code is now a dict like {"index.html": "...", "style.css": "...", ...}
+    seen = set()
+
+    if "LICENSE" in app_code:
+        print("⚠️ Removing LICENSE from app_code — handled separately later.")
+        app_code.pop("LICENSE", None)
+    
+    def fix_common_ci_errors(app_code):
+    #Patch common model-generated CI command issues.
+        fixed = {}
+        for fname, content in app_code.items():
+            if fname.endswith((".yml", ".yaml")):
+                if "ruff ." in content and "ruff check ." not in content:
+                    print("⚙️ Auto-fixing invalid Ruff syntax in workflow.")
+                    content = content.replace("ruff .", "ruff check . || true")
+                if "ruff --fix ." in content and "ruff check . --fix" not in content:
+                    content = content.replace("ruff --fix .", "ruff check . --fix || true")
+            fixed[fname] = content
+        return fixed
+    app_code = fix_common_ci_errors(app_code)
+
     for filename, content in app_code.items():
         if filename.startswith("```") or filename.strip() == "":
             continue
         content = content.replace("```html", "").replace("```", "").strip()
+        clean = filename.strip()
+        if clean != filename:
+            print(f"⚠️ Filename '{filename}' has hidden whitespace — normalized to '{clean}'")
+        if clean.lower() in seen:
+            print(f"⚠️ Duplicate filename detected: {clean}")
+        seen.add(clean.lower())
+
+        data = content.encode("utf-8", errors="ignore")
+        if any(b < 9 or (13 < b < 32) for b in data):
+            print(f"⚠️ Non-printable bytes found in {filename}")
+        if len(data) > 800_000:
+            print(f"⚠️ Large file detected ({len(data)} bytes): {filename}")
+
         repo.create_file(
             filename,
             f"Add {filename}",
@@ -283,6 +331,8 @@ def create_and_deploy_repo(task, app_code, brief, attachments=None):
         process_attachments(attachments, repo)
 
     # --- Add or update LICENSE safely ---
+    print("📋 LICENSE exists?", any(f.name == "LICENSE" for f in repo.get_contents("")))
+
     mit_text = get_mit_license(user.name)
     try:
         contents = repo.get_contents("LICENSE")
@@ -457,10 +507,8 @@ def update_existing_repo(task, new_brief):
         old_html = contents.decoded_content.decode("utf-8")
 
         html_prompt = f"""You are an expert HTML editor AI.
-
 TASK: {task}
 NEW BRIEF: {new_brief}
-
 INSTRUCTIONS:
 1. You MUST implement ALL changes required by the new brief (no skipping).
 2. Modify or replace elements, structures, and text as needed.
@@ -472,8 +520,6 @@ INSTRUCTIONS:
 8.Always add or alter at least one major section, element, or feature.
 9.Do not return the same code unchanged — if nothing needs changing, refactor styles, reorganize layout, or improve clarity.
 10.Return complete valid code without markdown formatting.
-
-
 EXISTING HTML:
 {old_html}
 """
@@ -498,17 +544,14 @@ EXISTING HTML:
         old_css = contents.decoded_content.decode("utf-8")
 
         css_prompt = f"""You are an expert CSS editor AI.
-
 TASK: {task}
 NEW BRIEF: {new_brief}
-
 INSTRUCTIONS:
 1. Implement every visual/style-related change required by the new brief.
 2. Add new selectors, modify existing ones, and remove conflicting style.
 3. Ensure visual contrast, responsiveness, and readability improvements.
 4. Always output complete valid CSS, no placeholders or comments.
 5. Output only CSS code.
-
 EXISTING CSS:
 {old_css}
 """
@@ -530,17 +573,14 @@ EXISTING CSS:
         old_js = contents.decoded_content.decode("utf-8")
 
         js_prompt = f"""You are an expert JavaScript editor AI.
-
 TASK: {task}
 NEW BRIEF: {new_brief}
-
 INSTRUCTIONS:
 1. Implement ALL new interactive or logic-based changes described in the brief.
 2. Add event handlers, fetch logic, or DOM updates as needed.
 3. Remove conflicting or outdated behavior.
 4. Ensure code is fully functional and aligned with HTML/CSS updates.
 5. Output only valid JS code, no explanations.
-
 EXISTING JS:
 {old_js}
 """
@@ -579,12 +619,13 @@ def delete_repo_if_exists(user, repo_name):
         print(f"🗑️ Deleted existing repo: {repo_name}")
 
         # Wait for GitHub to finalize
-        for _ in range(60):  # up to ~300s
+        for _ in range(120):  # up to ~600s
             time.sleep(5)
             try:
                 user.get_repo(repo_name)
             except github.UnknownObjectException:
                 print("✅ Repo deletion confirmed.")
+                time.sleep(15)
                 return
             print("⏳ Waiting for repo deletion...")
     except github.UnknownObjectException:
@@ -593,9 +634,7 @@ def delete_repo_if_exists(user, repo_name):
 
 def get_mit_license(name="Student"):
     return f"""MIT License
-
 Copyright (c) 2025 {name}
-
 Permission is hereby granted, free of charge, to any person obtaining a copy...
 """
 
@@ -617,6 +656,3 @@ def wait_for_pages_ready(pages_url, max_wait=60):
         time.sleep(3)
     print("⚠️ GitHub Pages did not become live within the timeout window.")
     return False
-
-
-
